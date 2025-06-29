@@ -1,0 +1,108 @@
+{
+  "name": "CSV Data Quality Analyzer (HTTP)",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -460,
+        -20
+      ],
+      "id": "440be824-668a-4901-a1c1-ee14b7f18994",
+      "name": "When clicking ‘Execute workflow’"
+    },
+    {
+      "parameters": {
+        "url": "https://raw.githubusercontent.com/fivethirtyeight/data/master/college-majors/recent-grads.csv\n",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -240,
+        -20
+      ],
+      "id": "4ec07937-ba46-4ae7-a4dd-908a3b569c48",
+      "name": "HTTP Request"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Final Working CSV Parser - Correctly accesses n8n HTTP response\nconsole.log(\"🔍 Starting CSV analysis...\");\n\nlet data = [];\nlet datasetSource = \"CSV Dataset\";\n\ntry {\n  // Get the HTTP response\n  const httpResponse = $input.first();\n  \n  if (!httpResponse || !httpResponse.json) {\n    throw new Error(\"No response from HTTP Request\");\n  }\n  \n  // The CSV data is in the \"data\" field\n  const csvText = httpResponse.json.data;\n  \n  if (!csvText || typeof csvText !== 'string') {\n    throw new Error(\"No CSV text found in response data field\");\n  }\n  \n  console.log(`📄 CSV text length: ${csvText.length} characters`);\n  \n  // Parse CSV manually\n  const lines = csvText.split('\\n').filter(line => line.trim().length > 0);\n  console.log(`📊 Found ${lines.length} lines in CSV`);\n  \n  if (lines.length < 2) {\n    throw new Error(\"CSV must have at least header and one data row\");\n  }\n  \n  // Parse header row - handle quoted fields properly\n  const headerLine = lines[0];\n  const headers = headerLine.split(',').map(header => header.trim().replace(/^\"|\"$/g, ''));\n  console.log(`📋 Headers (${headers.length}): ${headers.join(', ')}`);\n  \n  // Parse data rows with better CSV parsing\n  for (let i = 1; i < lines.length; i++) {\n    const line = lines[i].trim();\n    if (!line) continue;\n    \n    // Simple CSV parsing - split by comma but handle quoted fields\n    const values = [];\n    let current = '';\n    let inQuotes = false;\n    \n    for (let j = 0; j < line.length; j++) {\n      const char = line[j];\n      \n      if (char === '\"') {\n        inQuotes = !inQuotes;\n      } else if (char === ',' && !inQuotes) {\n        values.push(current.trim());\n        current = '';\n      } else {\n        current += char;\n      }\n    }\n    values.push(current.trim()); // Add the last field\n    \n    // Create row object if we have the right number of fields\n    if (values.length === headers.length) {\n      const row = {};\n      headers.forEach((header, index) => {\n        let value = values[index].replace(/^\"|\"$/g, ''); // Remove quotes\n        \n        // Try to convert numbers\n        if (value && !isNaN(value) && value !== '' && !isNaN(parseFloat(value))) {\n          value = parseFloat(value);\n        }\n        \n        // Convert empty strings to null for missing data detection\n        if (value === '') {\n          value = null;\n        }\n        \n        row[header] = value;\n      });\n      data.push(row);\n    }\n  }\n  \n  console.log(`✅ Successfully parsed ${data.length} records`);\n  \n  // Detect dataset type\n  if (headers.includes('PassengerId') || headers.includes('Name')) {\n    datasetSource = \"Titanic Dataset\";\n  } else if (headers.includes('Species') || headers.includes('species')) {\n    datasetSource = \"Iris Dataset\";\n  } else {\n    datasetSource = \"CSV Dataset\";\n  }\n  \n  console.log(`📈 Dataset: ${datasetSource}`);\n  \n} catch (error) {\n  console.log(`❌ Error parsing CSV: ${error.message}`);\n  \n  return [{\n    json: {\n      error: `Failed to parse CSV: ${error.message}`,\n      totalRows: 0,\n      totalColumns: 0,\n      columnsWithMissing: [],\n      overallStats: {\n        columnsWithMissingData: 0,\n        columnsWithCompleteData: 0,\n        averageMissingPercentage: 0,\n        dataQualityScore: 0,\n        severityBreakdown: { critical: 0, high: 0, medium: 0, low: 0 }\n      },\n      recommendations: [\n        \"🚨 CSV Parsing Error:\",\n        `• ${error.message}`,\n        \"💡 Check the CSV URL and format\"\n      ],\n      datasetInfo: {\n        source: \"Error - Parse Failed\",\n        downloadedAt: new Date().toISOString(),\n        processor: \"n8n CSV Parser\"\n      }\n    }\n  }];\n}\n\n// Initialize analysis results\nconst analysis = {\n  totalRows: data.length,\n  totalColumns: 0,\n  columnsWithMissing: [],\n  overallStats: {},\n  recommendations: [],\n  datasetInfo: {\n    source: datasetSource,\n    downloadedAt: new Date().toISOString(),\n    processor: \"n8n CSV Parser\"\n  }\n};\n\nif (data.length === 0) {\n  analysis.error = \"No data rows found after parsing\";\n  analysis.recommendations.push(\"🚨 CSV appears to have no data rows\");\n  return [{ json: analysis }];\n}\n\n// Get column information\nconst columns = Object.keys(data[0]);\nanalysis.totalColumns = columns.length;\n\nconsole.log(`📊 Analyzing ${columns.length} columns across ${data.length} records...`);\n\n// Analyze each column for missing values\ncolumns.forEach((column, index) => {\n  let missingCount = 0;\n  let totalValues = data.length;\n  let sampleValues = [];\n  \n  data.forEach(row => {\n    const value = row[column];\n    \n    // Collect sample non-missing values (first 3)\n    if (sampleValues.length < 3 && value !== null && value !== undefined && value !== '') {\n      sampleValues.push(String(value));\n    }\n    \n    // Check for missing values - comprehensive check\n    if (value === null || \n        value === undefined || \n        value === '' || \n        value === 'null' || \n        value === 'NULL' || \n        value === 'N/A' || \n        value === 'n/a' ||\n        value === 'NA' ||\n        value === '#N/A' ||\n        value === 'None' ||\n        (typeof value === 'string' && value.trim() === '')) {\n      missingCount++;\n    }\n  });\n  \n  const missingPercentage = (missingCount / totalValues) * 100;\n  \n  // Only track columns that actually have missing data\n  if (missingCount > 0) {\n    analysis.columnsWithMissing.push({\n      column: column,\n      missingCount: missingCount,\n      totalValues: totalValues,\n      missingPercentage: parseFloat(missingPercentage.toFixed(2)),\n      completenessPercentage: parseFloat((100 - missingPercentage).toFixed(2)),\n      sampleValues: sampleValues,\n      dataType: typeof data[0][column],\n      severity: missingPercentage > 50 ? 'Critical' : missingPercentage > 20 ? 'High' : missingPercentage > 5 ? 'Medium' : 'Low'\n    });\n  }\n});\n\n// Sort missing columns by severity (highest missing percentage first)\nanalysis.columnsWithMissing.sort((a, b) => b.missingPercentage - a.missingPercentage);\n\n// Calculate overall statistics\nconst totalMissingColumns = analysis.columnsWithMissing.length;\nconst avgMissingPercentage = totalMissingColumns > 0 \n  ? analysis.columnsWithMissing.reduce((sum, col) => sum + col.missingPercentage, 0) / totalMissingColumns\n  : 0;\n\nconst severityBreakdown = {\n  critical: analysis.columnsWithMissing.filter(col => col.severity === 'Critical').length,\n  high: analysis.columnsWithMissing.filter(col => col.severity === 'High').length,\n  medium: analysis.columnsWithMissing.filter(col => col.severity === 'Medium').length,\n  low: analysis.columnsWithMissing.filter(col => col.severity === 'Low').length\n};\n\nanalysis.overallStats = {\n  columnsWithMissingData: totalMissingColumns,\n  columnsWithCompleteData: analysis.totalColumns - totalMissingColumns,\n  averageMissingPercentage: parseFloat(avgMissingPercentage.toFixed(2)),\n  dataQualityScore: parseFloat((100 - avgMissingPercentage).toFixed(2)),\n  severityBreakdown: severityBreakdown,\n  worstColumn: analysis.columnsWithMissing.length > 0 ? analysis.columnsWithMissing[0] : null,\n  bestIncompleteColumn: analysis.columnsWithMissing.length > 0 ? analysis.columnsWithMissing[analysis.columnsWithMissing.length - 1] : null\n};\n\n// Generate actionable recommendations\nif (totalMissingColumns === 0) {\n  analysis.recommendations.push('🎉 PERFECT: All columns are complete with no missing values!');\n  analysis.recommendations.push('✅ This dataset is ready for immediate analysis and modeling');\n} else {\n  // Overall quality assessment\n  if (analysis.overallStats.dataQualityScore >= 90) {\n    analysis.recommendations.push('🎉 EXCELLENT: Dataset has outstanding quality with minimal missing data');\n  } else if (analysis.overallStats.dataQualityScore >= 80) {\n    analysis.recommendations.push('✅ VERY GOOD: Dataset quality is high with minor data gaps');\n  } else if (analysis.overallStats.dataQualityScore >= 70) {\n    analysis.recommendations.push('👍 GOOD: Dataset quality is acceptable with some cleaning needed');\n  } else if (analysis.overallStats.dataQualityScore >= 60) {\n    analysis.recommendations.push('⚠️ FAIR: Dataset needs moderate cleaning before analysis');\n  } else {\n    analysis.recommendations.push('🚨 POOR: Dataset requires significant data quality improvements');\n  }\n  \n  // Specific column recommendations - show top 5 worst\n  const topWorstColumns = analysis.columnsWithMissing.slice(0, 5);\n  topWorstColumns.forEach(col => {\n    if (col.missingPercentage > 70) {\n      analysis.recommendations.push(`🗑️ CONSIDER DROPPING: '${col.column}' (${col.missingPercentage}% missing)`);\n    } else if (col.missingPercentage > 30) {\n      analysis.recommendations.push(`🔧 NEEDS ATTENTION: '${col.column}' (${col.missingPercentage}% missing)`);\n    } else if (col.missingPercentage > 10) {\n      analysis.recommendations.push(`⚡ MODERATE CLEANUP: '${col.column}' (${col.missingPercentage}% missing)`);\n    } else {\n      analysis.recommendations.push(`✨ MINOR TOUCH-UP: '${col.column}' (${col.missingPercentage}% missing)`);\n    }\n  });\n  \n  // Action items\n  if (severityBreakdown.critical > 0) {\n    analysis.recommendations.push(`📋 IMMEDIATE ACTION: Review ${severityBreakdown.critical} critical column(s) for removal`);\n  }\n  if (severityBreakdown.high > 0) {\n    analysis.recommendations.push(`📋 STRATEGY NEEDED: Develop plan for ${severityBreakdown.high} high-missing column(s)`);\n  }\n}\n\nconsole.log(`✅ Analysis Complete!`);\nconsole.log(`📊 ${analysis.totalRows} rows × ${analysis.totalColumns} columns`);\nconsole.log(`🎯 Data Quality Score: ${analysis.overallStats.dataQualityScore}%`);\nconsole.log(`📉 Missing data found in ${totalMissingColumns} of ${analysis.totalColumns} columns`);\n\nreturn [{ json: analysis }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -20,
+        -20
+      ],
+      "id": "ebc4d9cc-dfc9-4a52-aa9c-fcf424521316",
+      "name": "Code"
+    },
+    {
+      "parameters": {
+        "html": "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n    <meta charset=\"UTF-8\">\n    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n    <title>CSV Data Quality Report</title>\n    <style>\n        * { margin: 0; padding: 0; box-sizing: border-box; }\n        \n        body {\n            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;\n            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);\n            min-height: 100vh;\n            padding: 20px;\n        }\n        \n        .container {\n            max-width: 1000px;\n            margin: 0 auto;\n            background: white;\n            border-radius: 16px;\n            box-shadow: 0 20px 40px rgba(0,0,0,0.1);\n            overflow: hidden;\n        }\n        \n        .header {\n            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);\n            color: white;\n            padding: 40px;\n            text-align: center;\n        }\n        \n        .header h1 {\n            font-size: 2.5em;\n            font-weight: 300;\n            margin-bottom: 10px;\n        }\n        \n        .header p {\n            opacity: 0.9;\n            font-size: 1.1em;\n        }\n        \n        .content {\n            padding: 40px;\n        }\n        \n        .score-section {\n            text-align: center;\n            margin-bottom: 40px;\n        }\n        \n        .score-circle {\n            width: 140px;\n            height: 140px;\n            border-radius: 50%;\n            margin: 0 auto 20px;\n            display: flex;\n            align-items: center;\n            justify-content: center;\n            font-size: 2.5em;\n            font-weight: bold;\n            color: white;\n            background: linear-gradient(135deg, \n                {{ $json.overallStats.dataQualityScore >= 95 ? '#4CAF50, #45a049' : \n                   $json.overallStats.dataQualityScore >= 85 ? '#2196F3, #1976D2' : \n                   $json.overallStats.dataQualityScore >= 75 ? '#FF9800, #F57C00' : \n                   $json.overallStats.dataQualityScore >= 60 ? '#FF5722, #D84315' : '#f44336, #c62828' }});\n        }\n        \n        .stats-grid {\n            display: grid;\n            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));\n            gap: 20px;\n            margin: 40px 0;\n        }\n        \n        .stat-card {\n            background: #f8f9fa;\n            border-radius: 12px;\n            padding: 24px;\n            text-align: center;\n            border-left: 4px solid #667eea;\n        }\n        \n        .stat-number {\n            font-size: 2.2em;\n            font-weight: bold;\n            color: #667eea;\n            margin-bottom: 8px;\n        }\n        \n        .stat-label {\n            color: #6c757d;\n            font-weight: 500;\n        }\n        \n        .recommendations {\n            background: #fff3cd;\n            border: 1px solid #ffeaa7;\n            border-radius: 12px;\n            padding: 30px;\n            margin: 30px 0;\n        }\n        \n        .recommendations h3 {\n            color: #856404;\n            margin-bottom: 20px;\n            font-size: 1.3em;\n        }\n        \n        .recommendations ul {\n            list-style: none;\n            padding: 0;\n        }\n        \n        .recommendations li {\n            margin: 12px 0;\n            padding: 8px 12px;\n            background: rgba(255,255,255,0.5);\n            border-radius: 6px;\n            line-height: 1.5;\n        }\n        \n        .missing-columns {\n            margin: 30px 0;\n        }\n        \n        .missing-columns h3 {\n            color: #495057;\n            margin-bottom: 20px;\n        }\n        \n        .column-item {\n            display: flex;\n            justify-content: space-between;\n            align-items: center;\n            padding: 12px 16px;\n            margin: 8px 0;\n            background: #f8f9fa;\n            border-radius: 8px;\n            border-left: 4px solid;\n        }\n        \n        .column-item.critical { border-left-color: #dc3545; }\n        .column-item.high { border-left-color: #fd7e14; }\n        .column-item.medium { border-left-color: #ffc107; }\n        .column-item.low { border-left-color: #28a745; }\n        \n        .column-name {\n            font-weight: 600;\n            color: #495057;\n        }\n        \n        .column-stats {\n            text-align: right;\n            font-size: 0.9em;\n            color: #6c757d;\n        }\n        \n        .footer {\n            background: #f8f9fa;\n            padding: 20px;\n            text-align: center;\n            color: #6c757d;\n            font-size: 0.9em;\n        }\n        \n        .no-missing {\n            text-align: center;\n            padding: 40px;\n            background: #d4edda;\n            border-radius: 12px;\n            color: #155724;\n            font-size: 1.1em;\n        }\n    </style>\n</head>\n<body>\n    <div class=\"container\">\n        <div class=\"header\">\n            <h1>📊 CSV Data Quality Report</h1>\n            <p>{{ $json.datasetInfo.source }}</p>\n            <p>Generated: {{ new Date($json.datasetInfo.downloadedAt).toLocaleString() }}</p>\n        </div>\n        \n        <div class=\"content\">\n            <div class=\"score-section\">\n                <div class=\"score-circle\">\n                    {{ $json.overallStats.dataQualityScore }}%\n                </div>\n                <h2>Data Quality Score</h2>\n                <p>\n                    {{ $json.overallStats.dataQualityScore >= 95 ? '🎉 Perfect' : \n                       $json.overallStats.dataQualityScore >= 85 ? '✅ Excellent' : \n                       $json.overallStats.dataQualityScore >= 75 ? '👍 Good' : \n                       $json.overallStats.dataQualityScore >= 60 ? '⚠️ Fair' : '🚨 Poor' }}\n                </p>\n            </div>\n            \n            <div class=\"stats-grid\">\n                <div class=\"stat-card\">\n                    <div class=\"stat-number\">{{ $json.totalRows }}</div>\n                    <div class=\"stat-label\">Total Records</div>\n                </div>\n                <div class=\"stat-card\">\n                    <div class=\"stat-number\">{{ $json.totalColumns }}</div>\n                    <div class=\"stat-label\">Total Columns</div>\n                </div>\n                <div class=\"stat-card\">\n                    <div class=\"stat-number\">{{ $json.overallStats.columnsWithMissingData }}</div>\n                    <div class=\"stat-label\">Columns with Missing Data</div>\n                </div>\n                <div class=\"stat-card\">\n                    <div class=\"stat-number\">{{ $json.overallStats.columnsWithCompleteData }}</div>\n                    <div class=\"stat-label\">Complete Columns</div>\n                </div>\n            </div>\n            \n\n        </div>\n        \n        <div class=\"footer\">\n            <p>Report generated by n8n CSV Data Quality Analyzer</p>\n            <p>Processor: {{ $json.datasetInfo.processor }}</p>\n        </div>\n    </div>\n</body>\n</html>"
+      },
+      "type": "n8n-nodes-base.html",
+      "typeVersion": 1.2,
+      "position": [
+        200,
+        -20
+      ],
+      "id": "6684d261-a10c-4a8c-92b5-01544b897492",
+      "name": "HTML"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "When clicking ‘Execute workflow’": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request": {
+      "main": [
+        [
+          {
+            "node": "Code",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code": {
+      "main": [
+        [
+          {
+            "node": "HTML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "ec47f76d-7c55-4cd5-9a6a-b77a94700da8",
+  "meta": {
+    "instanceId": "b618a55b411e61d4fca8373a51fa787630f8b913de1798aff1201f0cb3ce68b2"
+  },
+  "id": "TqpAWv4CF6VLNLji",
+  "tags": []
+}
